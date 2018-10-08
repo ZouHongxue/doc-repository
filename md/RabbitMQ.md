@@ -298,15 +298,138 @@ public class AmqpConfig {
 
 因此，生产者只能将消息交给一个交换机，这个交换机是一个非常简单的东西，它一边接受生产者的消息另一边将消息推给队列。这个交换机必须清楚的知道对于接收到的消息如何处理。是该交给一个特定的队列，还是发送给很多队列，还是应该丢弃掉这个消息。这些规则通过交换机的类型进行定义。
 
+
+
 ## 交换机类型
 
-direct
+exchange在和queue进行binding时会设置**routingkey**。
 
-topic
+### direct
 
-headers
+ 在direct类型的exchange中，只有这两个routing key完全相同，exchange才会选择对应的binging进行消息路由。 
 
-fanout
+### topic
+
+此类型exchange和上面的direct类型差不多，但direct类型要求routingkey完全相等，这里的routingkey可以有通配符：'*','#'.
+
+其中'*'表示匹配一个单词， '#'则表示匹配没有或者多个单词
+
+> Topic exchange is powerful and can behave like other exchanges.
+>
+> When a queue is bound with "#" (hash) binding key - it will receive all the messages, regardless of the routing key - like in fanout exchange.
+>
+> When special characters "*" (star) and "#" (hash) aren't used in bindings, the topic exchange will behave just like a direct one.
+
+topic很强。
+
+当一个队列用#绑定时，不管routing key是啥它都能匹配，所以它会接收所有信息，就是一个广播交换机。
+
+当* 和#都没有用在绑定中，那topic交换机就是一个direct交换机，没有区别。
+
+### headers
+
+其路由的规则是根据header来判断，其中的header就是以下方法的**arguments**参数。headers并不常用。
+
+```Java
+//eg
+Map<String, Object> map = new HashMap<String, Object>();
+map.put("h1", "v1");
+map.put("h2", "v2");
+BindingBuilder.bind(autoDeleteQueue1).to(headersExchange).whereAll(map).match();
+```
+
+### fanout
+
+> The fanout exchange is very simple. As you can probably guess from the name, it just broadcasts all the messages it receives to all the queues it knows. And that's exactly what we need for fanning out our messages. 
+
+广播交换机非常简单，可以从名字猜测出它是广播所有接收到的消息给它已知的队列。广播信息就用这个。
+
+### 匿名队列
+
+> We're also interested only in currently flowing messages not in the old ones. To solve that we need two things.
+>
+> Firstly, whenever we connect to Rabbit we need a fresh, empty queue. To do this we could create a queue with a random name, or, even better - let the server choose a random queue name for us.
+>
+> Secondly, once we disconnect the consumer the queue should be automatically deleted. To do this with the spring-amqp client, we defined and *AnonymousQueue*, which creates a non-durable, exclusive, autodelete queue with a generated name:
+
+我们经常只对最近的信息感兴趣，对旧数据没有，为了解决这个我们需要两件事：
+
+1.无论何时我们连接到Rabbit，我们需要一个新的、空的队列。做到这个我们需要一个随机名字或者更好的方法——让服务器给我们选一个随机队列名。
+
+2.一旦我们从消费者断开连接，队列应该自动删除。用sping-amqp做到这个事，我们定义了*AnonymousQueue*，作用就是用一个生成的名字创建一个非持久的、专用的自动删除的队列。
+
+### 绑定
+
+> We've already created a fanout exchange and a queue. Now we need to tell the exchange to send messages to our queue. That relationship between exchange and a queue is called a *binding*. In the above Tut3Config you can see that we have two bindings, one for each AnonymousQueue. 
+
+我们已经创建了一个广播交换机和一个队列，现在我们需要告诉这个交换机发送信息给我们的队列。交换机和队列直接的关系我们叫做绑定。下面的代码中可以看到两个绑定，每一个都对应一个匿名队列。
+
+### Code
+
+```java
+//代码结构类比SpringBoot版Demo，这里只贴改动代码
+//更多的详细代码见
+//config
+	//定义一个广播交换机
+	@Bean
+    public FanoutExchange fanout() {
+        return new FanoutExchange("tut.fanout");
+    }
+    
+    private static class ReceiverConfig {
+        
+        //定义一个队列
+        @Bean(name = "autoDeleteQueue1")
+        public Queue autoDeleteQueue1() {
+            //匿名队列
+            return new AnonymousQueue();
+        }
+
+        @Bean(name = "autoDeleteQueue2")
+        public Queue autoDeleteQueue2() {
+            return new AnonymousQueue();
+        }
+
+        //绑定队列到交换机
+        @Bean
+        public Binding binding1(FanoutExchange fanout,
+            @Qualifier("autoDeleteQueue1") Queue autoDeleteQueue1) {
+            return BindingBuilder.bind(autoDeleteQueue1).to(fanout);
+        }
+
+        @Bean
+        public Binding binding2(FanoutExchange fanout,
+            @Qualifier("autoDeleteQueue2") Queue autoDeleteQueue2) {
+            return BindingBuilder.bind(autoDeleteQueue2).to(fanout);
+        }
+
+        @Bean
+        public Tut3Receiver receiver() {
+            return new Tut3Receiver();
+        }
+    }
+```
+
+```java
+//Sender,按之前模板添加或替换，将消息发送到广播交换机
+	@Autowired
+    private FanoutExchange fanout;
+	
+	template.convertAndSend(fanout.getName(), "", message);
+```
+
+```java
+//Receiver，receive函数已经写好了，接收指定队列的消息
+	@RabbitListener(queues = "#{autoDeleteQueue1.name}")
+    public void receive1(String in) throws InterruptedException {
+        receive(in, 1);
+    }
+
+    @RabbitListener(queues = "#{autoDeleteQueue2.name}")
+    public void receive2(String in) throws InterruptedException {
+        receive(in, 2);
+    }
+```
 
 
 
